@@ -1,0 +1,42 @@
+name: Job Hunter Bot
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Runs at the top of every hour
+  workflow_dispatch:        # Lets you trigger manually to test
+
+permissions:
+  contents: write           # Needed to save seen_jobs.json back to repo
+
+jobs:
+  hunt-jobs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Job Hunter Bot
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: node scripts/job-hunter.js
+
+      - name: Save seen jobs back to repo
+        run: |
+          git config user.name "Job Hunter Bot"
+          git config user.email "action@github.com"
+          git add data/seen_jobs.json
+          git diff --staged --quiet || git commit -m "chore: update seen jobs [skip ci]"
+          git push
