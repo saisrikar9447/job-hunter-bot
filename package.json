@@ -1,0 +1,13 @@
+{
+  "name": "job-hunter-bot",
+  "version": "1.0.0",
+  "description": "Automated job hunting bot",
+  "main": "scripts/job-hunter.js",
+  "scripts": {
+    "start": "node scripts/job-hunter.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "resend": "^3.2.0"
+  }
+}
