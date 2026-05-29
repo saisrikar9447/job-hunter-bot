@@ -4,7 +4,6 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
-// ── Config ────────────────────────────────────────────────────────────────────
 const CONFIG = {
   recipientEmail: 'srikardangeti69@gmail.com',
   maxJobsPerRun: 8,
@@ -17,7 +16,6 @@ const CONFIG = {
   seenJobsFile: path.join(__dirname, '..', 'data', 'seen_jobs.json'),
 };
 
-// ── Satya's Base Resume ───────────────────────────────────────────────────────
 const BASE_RESUME = `SATYA SAI SRIKAR DANGETI
 Full Stack Software Engineer
 Columbus, OH | (414) 629-0548 | Satya.dangeti24@gmail.com
@@ -37,7 +35,7 @@ PROFESSIONAL EXPERIENCE
 
 Software Engineer II, Full Stack | May 2025 - Present
 Huntington Bank | Columbus, OH
-- Engineer full-stack banking applications serving 5000+ internal users across operations, compliance, and fraud analytics teams using Spring Boot microservices and React SPAs.
+- Engineer full-stack banking applications serving 5,000+ internal users across operations, compliance, and fraud analytics teams using Spring Boot microservices and React SPAs.
 - Designed and implemented 12+ RESTful microservices with Spring Security, JWT token validation, and OAuth 2.0 flows for secure transaction processing and account management workflows.
 - Built reusable React component library with Redux state management, reducing UI development time by 28% across 6 interconnected applications.
 - Optimized Spring Data JPA queries improving API response times from 850ms to 280ms on high-traffic endpoints.
@@ -51,6 +49,7 @@ University of Wisconsin-Milwaukee | Milwaukee, WI
 - Designed React dashboards with real-time data visualization using Chart.js for enrollment trends and academic metrics.
 - Refactored N+1 queries reducing report generation time by 52% across 10M+ student records.
 - Secured PII with Spring Security field-level encryption and AWS KMS ensuring FERPA compliance.
+- Delivered 18 features across 3 major releases in 2-week Agile sprints with zero critical production incidents.
 
 Software Engineer, Distributed Systems | Aug 2021 - Aug 2023
 Walmart | Remote
@@ -81,7 +80,6 @@ EDUCATION
 Master of Science, Information Technology | May 2025
 University of Wisconsin-Milwaukee | GPA: 3.6/4.0`;
 
-// ── Seen Jobs ─────────────────────────────────────────────────────────────────
 function loadSeenJobs() {
   try {
     if (!fs.existsSync(CONFIG.seenJobsFile)) return {};
@@ -99,7 +97,6 @@ function saveSeenJobs(seen) {
   fs.writeFileSync(CONFIG.seenJobsFile, JSON.stringify(seen, null, 2));
 }
 
-// ── Job Search ────────────────────────────────────────────────────────────────
 async function searchJobs() {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
@@ -113,7 +110,7 @@ async function searchJobs() {
     try {
       console.log(`Searching: "${term}"...`);
       const res = await fetch(url);
-      if (!res.ok) { console.warn(`  Adzuna ${res.status} for "${term}"`); continue; }
+      if (!res.ok) { console.warn(`  Adzuna ${res.status}`); continue; }
       const data = await res.json();
       for (const job of (data.results || [])) {
         if (!seenIds.has(job.id)) {
@@ -130,7 +127,7 @@ async function searchJobs() {
           });
         }
       }
-      console.log(`  Found ${data.results?.length || 0} results`);
+      console.log(`  ${data.results?.length || 0} results`);
     } catch (err) { console.warn(`  Error: ${err.message}`); }
   }
 
@@ -139,20 +136,22 @@ async function searchJobs() {
   return allJobs;
 }
 
-// ── Tailor Resume via Claude ──────────────────────────────────────────────────
 async function tailorResume(job) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const prompt = `You are an expert resume writer helping a senior software engineer land interviews at top tech companies.
+  const prompt = `You are an expert resume writer. Tailor the resume below for this specific job.
 
-Tailor the resume below for this specific job. Follow ALL rules strictly:
-1. Only use skills and experience already in the resume — never add anything new
-2. Write naturally and professionally — must NOT sound AI-generated
-3. Naturally weave in keywords from the job description for ATS compatibility
-4. Reorder bullet points within each role to highlight most relevant work for THIS job
-5. Rewrite the Professional Summary to mirror this company's language and needs
-6. Keep all job titles, companies, dates, and metrics exactly as-is (no changes to numbers)
-7. Output plain text only — no markdown, no asterisks, no special symbols
-8. Focus strictly on Full Stack Developer skills
+STRICT RULES — follow every single one:
+1. Output ONLY the resume text. No commentary, no intro, no explanation.
+2. Use normal sentence case throughout — absolutely NO ALL CAPS anywhere in the resume body (section headings are the only exception, keep them as-is).
+3. Every bullet point must be a COMPLETE sentence — never cut off or truncate mid-sentence.
+4. Keep every bullet point to ONE line of thought — do not split a bullet across unrelated ideas.
+5. Only use skills and experience already in the resume — never invent anything new.
+6. Rewrite the Professional Summary in 3-4 complete sentences that mirror this company's language.
+7. Reorder bullet points within each role so the most relevant ones appear first.
+8. Keep all job titles, companies, dates, and metrics exactly as-is.
+9. Plain text only — no markdown, no asterisks, no special symbols except standard dashes and pipes.
+10. Weave in keywords from the job description naturally for ATS compatibility.
+11. Focus strictly on Full Stack Developer skills.
 
 JOB: ${job.title} at ${job.company}
 LOCATION: ${job.location}
@@ -163,12 +162,12 @@ ${job.description}
 BASE RESUME:
 ${BASE_RESUME}
 
-Output the complete tailored resume in plain text now:`;
+Output the tailored resume now (plain text, complete sentences, normal case):`;
 
   try {
     const msg = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
+      max_tokens: 1800,
       messages: [{ role: 'user', content: prompt }],
     });
     return msg.content[0]?.text || BASE_RESUME;
@@ -178,129 +177,222 @@ Output the complete tailored resume in plain text now:`;
   }
 }
 
-// ── Generate PDF Buffer from resume text ──────────────────────────────────────
-function generateResumePDF(resumeText, jobTitle, company) {
+// ── Clean PDF Generator ───────────────────────────────────────────────────────
+function generateResumePDF(resumeText) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 45, size: 'LETTER' });
-    const buffers = [];
+    const doc = new PDFDocument({
+      margin: 0,
+      size: 'LETTER',
+      bufferPages: true,
+    });
 
-    doc.on('data', chunk => buffers.push(chunk));
+    const buffers = [];
+    doc.on('data', c => buffers.push(c));
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
 
-    const BLUE  = '#1D4ED8';
-    const DARK  = '#0F172A';
-    const MID   = '#374151';
-    const LIGHT = '#6B7280';
-    const W     = doc.page.width - 90; // usable width
+    // Layout constants
+    const ML = 50;          // margin left
+    const MT = 46;          // margin top
+    const MR = 50;          // margin right
+    const PW = 612;         // page width
+    const TW = PW - ML - MR; // text width = 512
+
+    // Colors
+    const C_DARK  = '#0F172A';
+    const C_BLUE  = '#1D4ED8';
+    const C_MID   = '#374151';
+    const C_LIGHT = '#94A3B8';
+    const C_RULE  = '#E2E8F0';
+
+    let y = MT;
+
+    // Helper: advance y, add new page if needed
+    function checkPage(needed = 14) {
+      if (y + needed > 755) {
+        doc.addPage();
+        y = MT;
+      }
+    }
+
+    // Helper: draw a full-width horizontal rule
+    function drawRule(color = C_RULE, thickness = 0.5) {
+      doc.moveTo(ML, y).lineTo(ML + TW, y).lineWidth(thickness).strokeColor(color).stroke();
+    }
+
+    // Helper: write a line of text and return its rendered height
+    function writeLine(text, opts = {}) {
+      const {
+        font = 'Helvetica',
+        size = 9.5,
+        color = C_MID,
+        align = 'left',
+        indent = 0,
+        maxWidth = TW,
+      } = opts;
+
+      const x = ML + indent;
+      const w = maxWidth - indent;
+
+      doc.font(font).fontSize(size).fillColor(color);
+      const h = doc.heightOfString(text, { width: w, lineGap: 2 });
+      checkPage(h + 2);
+      doc.text(text, x, y, { width: w, align, lineGap: 2 });
+      y += h + 2;
+      return h;
+    }
+
+    // ── Parse and render ────────────────────────────────────────────────────
+    const SECTION_HEADS = [
+      'PROFESSIONAL SUMMARY', 'CORE COMPETENCIES', 'PROFESSIONAL EXPERIENCE',
+      'PROJECTS', 'TECHNICAL ACHIEVEMENTS', 'EDUCATION', 'SKILLS', 'CERTIFICATIONS',
+      'EXPERIENCE', 'SUMMARY',
+    ];
+
+    function isSectionHead(line) {
+      const u = line.trim().toUpperCase();
+      return SECTION_HEADS.some(k => u === k || u.startsWith(k));
+    }
+
+    // Lines with a pipe that are NOT bullets — job header or company line
+    function isPipeHeader(line) {
+      return line.includes('|') && !line.trim().startsWith('-') && !line.trim().startsWith('•');
+    }
 
     const lines = resumeText.split('\n');
     let i = 0;
 
-    // ── Header block: name (first non-empty line) ─────────────────────────────
+    // Skip leading blank lines
     while (i < lines.length && lines[i].trim() === '') i++;
 
-    const nameLine = lines[i++] || 'SATYA SAI SRIKAR DANGETI';
-    doc.font('Helvetica-Bold').fontSize(20).fillColor(DARK).text(nameLine, 45, 45);
+    // ── Name ──────────────────────────────────────────────────────────────
+    if (i < lines.length) {
+      const name = lines[i++].trim();
+      checkPage(30);
+      doc.font('Helvetica-Bold').fontSize(21).fillColor(C_DARK).text(name, ML, y, { width: TW });
+      y += 26;
+    }
 
-    // Second line = job title
+    // ── Title (second non-empty line) ─────────────────────────────────────
     while (i < lines.length && lines[i].trim() === '') i++;
     if (i < lines.length) {
-      doc.font('Helvetica').fontSize(11).fillColor(BLUE).text(lines[i++]);
+      const title = lines[i++].trim();
+      checkPage(16);
+      doc.font('Helvetica').fontSize(11).fillColor(C_BLUE).text(title, ML, y, { width: TW });
+      y += 16;
     }
 
-    // Third line = contact
+    // ── Contact (third non-empty line) ────────────────────────────────────
     while (i < lines.length && lines[i].trim() === '') i++;
     if (i < lines.length) {
-      doc.font('Helvetica').fontSize(9).fillColor(LIGHT).text(lines[i++]);
+      const contact = lines[i++].trim();
+      checkPage(14);
+      doc.font('Helvetica').fontSize(9).fillColor(C_LIGHT).text(contact, ML, y, { width: TW });
+      y += 13;
     }
 
-    // Blue rule
-    doc.moveDown(0.4);
-    const ruleY = doc.y;
-    doc.moveTo(45, ruleY).lineTo(45 + W, ruleY).lineWidth(1.5).strokeColor(BLUE).stroke();
-    doc.moveDown(0.5);
+    // Blue divider under header
+    y += 4;
+    checkPage(4);
+    drawRule(C_BLUE, 1.5);
+    y += 8;
 
-    // ── Remaining lines ───────────────────────────────────────────────────────
-    const SECTION_KEYWORDS = [
-      'PROFESSIONAL SUMMARY', 'CORE COMPETENCIES', 'PROFESSIONAL EXPERIENCE',
-      'PROJECTS', 'TECHNICAL ACHIEVEMENTS', 'EDUCATION', 'SKILLS', 'EXPERIENCE',
-      'SUMMARY', 'CERTIFICATIONS'
-    ];
-
-    function isSectionHeading(line) {
-      const u = line.trim().toUpperCase();
-      return SECTION_KEYWORDS.some(k => u.includes(k));
-    }
-
-    function isJobHeader(line) {
-      // Lines like "Role | Date" or "Role | Company | Date" with a pipe
-      return line.includes('|') && !line.startsWith('-') && !line.startsWith('•');
-    }
-
-    function isCompanyLine(line) {
-      // Lines directly after job header, short, no dash
-      return false; // handled inline
-    }
-
+    // ── Rest of resume ────────────────────────────────────────────────────
     while (i < lines.length) {
-      const raw = lines[i];
+      const raw = lines[i++];
       const line = raw.trim();
-      i++;
 
-      if (line === '') { doc.moveDown(0.25); continue; }
-
-      if (isSectionHeading(line)) {
-        // Section heading
-        doc.moveDown(0.3);
-        doc.font('Helvetica-Bold').fontSize(8.5).fillColor(BLUE)
-           .text(line.toUpperCase(), { characterSpacing: 1.1 });
-        const sy = doc.y + 2;
-        doc.moveTo(45, sy).lineTo(45 + W, sy).lineWidth(0.4).strokeColor('#E2E8F0').stroke();
-        doc.moveDown(0.35);
-
-      } else if (line.startsWith('-') || line.startsWith('•')) {
-        // Bullet
-        const text = line.replace(/^[-•]\s*/, '');
-        doc.font('Helvetica').fontSize(9).fillColor(MID)
-           .text(`\u2022  ${text}`, { indent: 10, width: W - 10, lineGap: 1.5 });
-        doc.moveDown(0.1);
-
-      } else if (isJobHeader(line)) {
-        // Job title line — split on last pipe to get date on right
-        const parts = line.split('|');
-        const dateStr = parts[parts.length - 1].trim();
-        const roleStr = parts.slice(0, -1).join('|').trim();
-
-        const dateWidth = 95;
-        const roleWidth = W - dateWidth;
-        const startY = doc.y;
-
-        doc.font('Helvetica-Bold').fontSize(10).fillColor(DARK)
-           .text(roleStr, 45, startY, { width: roleWidth });
-        doc.font('Helvetica').fontSize(9).fillColor(LIGHT)
-           .text(dateStr, 45 + roleWidth, startY, { width: dateWidth, align: 'right' });
-        doc.y = startY + 14;
-        doc.moveDown(0.1);
-
-      } else if (line.includes('|') && doc.y < 500) {
-        // Company/location line (secondary pipe line)
-        doc.font('Helvetica').fontSize(9.5).fillColor(MID).text(line);
-        doc.moveDown(0.25);
-
-      } else {
-        // Normal paragraph text (summary, competencies, etc.)
-        doc.font('Helvetica').fontSize(9.5).fillColor(MID)
-           .text(line, { width: W, lineGap: 1.5 });
-        doc.moveDown(0.15);
+      if (line === '') {
+        y += 3;
+        continue;
       }
+
+      // Section heading
+      if (isSectionHead(line)) {
+        y += 6;
+        checkPage(22);
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(C_BLUE)
+           .text(line.toUpperCase(), ML, y, { width: TW, characterSpacing: 1.0 });
+        y += 12;
+        drawRule(C_RULE, 0.4);
+        y += 5;
+        continue;
+      }
+
+      // Bullet point
+      if (line.startsWith('-') || line.startsWith('•')) {
+        const text = line.replace(/^[-•]\s*/, '').trim();
+        if (!text) continue;
+
+        const bulletX = ML + 2;
+        const textX   = ML + 12;
+        const textW   = TW - 12;
+
+        const h = doc.font('Helvetica').fontSize(9.2)
+                     .heightOfString(text, { width: textW, lineGap: 1.5 });
+        checkPage(h + 3);
+
+        // bullet dot
+        doc.font('Helvetica').fontSize(9.2).fillColor(C_MID)
+           .text('\u2022', bulletX, y, { width: 8 });
+        // bullet text — starts on same line as dot
+        doc.font('Helvetica').fontSize(9.2).fillColor(C_MID)
+           .text(text, textX, y, { width: textW, lineGap: 1.5 });
+
+        y += h + 3;
+        continue;
+      }
+
+      // Pipe header line (job role + date, or company + location)
+      if (isPipeHeader(line)) {
+        const parts = line.split('|').map(p => p.trim());
+
+        if (parts.length >= 2) {
+          const last   = parts[parts.length - 1];
+          const first  = parts.slice(0, -1).join(' | ');
+          const dateW  = 100;
+          const roleW  = TW - dateW;
+
+          // Check if this looks like a "Role | Date" (job title line) vs "Company | City"
+          const isDateLine = /\d{4}/.test(last) || last.includes('Present') || last.includes('Remote');
+
+          if (isDateLine) {
+            // Bold role on left, light date on right
+            const h = Math.max(
+              doc.font('Helvetica-Bold').fontSize(10).heightOfString(first, { width: roleW }),
+              14
+            );
+            checkPage(h + 4);
+            y += 6; // extra spacing before each job
+            doc.font('Helvetica-Bold').fontSize(10).fillColor(C_DARK)
+               .text(first, ML, y, { width: roleW });
+            doc.font('Helvetica').fontSize(9).fillColor(C_LIGHT)
+               .text(last, ML + roleW, y, { width: dateW, align: 'right' });
+            y += h + 3;
+          } else {
+            // Company / location line
+            checkPage(14);
+            doc.font('Helvetica').fontSize(9.5).fillColor(C_MID)
+               .text(parts.join('  \u00B7  '), ML, y, { width: TW });
+            y += 13;
+          }
+        }
+        continue;
+      }
+
+      // Generic text (summary paragraphs, competency lines, etc.)
+      const h = doc.font('Helvetica').fontSize(9.5)
+                   .heightOfString(line, { width: TW, lineGap: 1.5 });
+      checkPage(h + 3);
+      doc.font('Helvetica').fontSize(9.5).fillColor(C_MID)
+         .text(line, ML, y, { width: TW, lineGap: 1.5 });
+      y += h + 3;
     }
 
     doc.end();
   });
 }
 
-// ── Build HTML Email ──────────────────────────────────────────────────────────
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -308,56 +400,46 @@ function esc(s) {
 function buildEmail(jobs) {
   const now = new Date().toLocaleString('en-US', {
     timeZone: 'America/New_York', weekday:'short', month:'short',
-    day:'numeric', hour:'2-digit', minute:'2-digit'
+    day:'numeric', hour:'2-digit', minute:'2-digit',
   });
 
   const blocks = jobs.map((job, i) => `
-<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:24px 28px;margin-bottom:24px;">
+<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:24px 28px;margin-bottom:20px;">
   <p style="margin:0 0 3px;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;">Job ${i+1} of ${jobs.length}</p>
   <h2 style="margin:0 0 2px;font-size:19px;font-weight:700;color:#111827;">${esc(job.title)}</h2>
-  <p style="margin:0 0 12px;font-size:14px;color:#374151;">${esc(job.company)} &nbsp;·&nbsp; ${esc(job.location)} &nbsp;·&nbsp; ${esc(job.salary)}</p>
+  <p style="margin:0 0 14px;font-size:13px;color:#374151;">${esc(job.company)} &nbsp;&middot;&nbsp; ${esc(job.location)} &nbsp;&middot;&nbsp; ${esc(job.salary)}</p>
   <a href="${esc(job.applyUrl)}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:9px 20px;border-radius:6px;font-size:13px;font-weight:600;margin-bottom:16px;">Apply Now &rarr;</a>
-  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:12px 16px;font-size:13px;color:#0369a1;">
-    <strong>📎 Tailored resume attached:</strong> <em>Resume_${esc(job.company.replace(/\s+/g,'_'))}.pdf</em><br>
-    <span style="font-size:12px;color:#0284c7;">Open the attachment — it's a PDF resume tailored specifically for this role.</span>
+  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:11px 15px;font-size:13px;color:#0369a1;">
+    <strong>&#128206; PDF attached:</strong> <em>Resume_${esc(job.company.replace(/\s+/g,'_').slice(0,25))}.pdf</em><br>
+    <span style="font-size:12px;color:#0284c7;">Scroll to the bottom of this email to open your tailored PDF resume for this role.</span>
   </div>
 </div>`).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
 <div style="max-width:680px;margin:0 auto;padding:24px 16px;">
-  <div style="background:#1d4ed8;border-radius:10px;padding:22px 28px;margin-bottom:24px;">
-    <h1 style="margin:0 0 5px;font-size:21px;font-weight:800;color:#fff;">Job Digest &mdash; ${jobs.length} New Match${jobs.length>1?'es':''}</h1>
-    <p style="margin:0;font-size:12px;color:rgba(255,255,255,.8);">Senior Full Stack Developer &nbsp;&middot;&nbsp; Remote + Hybrid &nbsp;&middot;&nbsp; ${now} ET</p>
+  <div style="background:#1d4ed8;border-radius:10px;padding:20px 28px;margin-bottom:20px;">
+    <h1 style="margin:0 0 4px;font-size:20px;font-weight:800;color:#fff;">&#127919; ${jobs.length} New Senior Full Stack Job${jobs.length>1?'s':''}</h1>
+    <p style="margin:0;font-size:12px;color:rgba(255,255,255,.8);">Remote + Hybrid &nbsp;&middot;&nbsp; ${now} ET</p>
   </div>
-  <p style="font-size:13px;color:#374151;margin:0 0 20px;padding:12px 16px;background:#fff;border-radius:8px;border:1px solid #e5e7eb;">
-    Each job below has a <strong>tailored PDF resume attached</strong> — open the PDF attachments to find the resume customized for that specific role.
-  </p>
   ${blocks}
-  <div style="text-align:center;padding:16px;color:#9ca3af;font-size:11px;">
-    <p style="margin:0;">Job Hunter Bot &mdash; powered by Claude AI</p>
-  </div>
+  <p style="text-align:center;font-size:11px;color:#9ca3af;margin-top:8px;">Job Hunter Bot &mdash; powered by Claude AI</p>
 </div></body></html>`;
 }
 
-// ── Send Email with PDF Attachments ───────────────────────────────────────────
 async function sendEmail(jobs) {
-  const resend = new Resend(process.env.RESEND_API_KEY);
   if (!process.env.RESEND_API_KEY) throw new Error('RESEND_API_KEY secret is missing.');
-
+  const resend = new Resend(process.env.RESEND_API_KEY);
   const now = new Date().toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 
-  // Build PDF attachments — one per job
   console.log('Generating PDF attachments...');
   const attachments = [];
   for (const job of jobs) {
-    const pdfBuffer = await generateResumePDF(job.tailoredResume, job.title, job.company);
-    const safeName = job.company.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
-    attachments.push({
-      filename: `Resume_${safeName}_${job.title.replace(/[^a-zA-Z0-9]/g,'_').slice(0,25)}.pdf`,
-      content: pdfBuffer.toString('base64'),
-    });
-    console.log(`  PDF ready: Resume_${safeName}.pdf (${Math.round(pdfBuffer.length/1024)}KB)`);
+    const pdf = await generateResumePDF(job.tailoredResume);
+    const safe = job.company.replace(/[^a-zA-Z0-9]/g,'_').slice(0,28);
+    const filename = `Resume_${safe}.pdf`;
+    attachments.push({ filename, content: pdf.toString('base64') });
+    console.log(`  ${filename} — ${Math.round(pdf.length/1024)}KB`);
   }
 
   const { error } = await resend.emails.send({
@@ -369,42 +451,32 @@ async function sendEmail(jobs) {
   });
 
   if (error) throw new Error(`Resend failed: ${JSON.stringify(error)}`);
-  console.log(`Email sent with ${attachments.length} PDF attachment(s).`);
+  console.log(`Email sent with ${attachments.length} PDF(s).`);
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`\n=== Job Hunter Bot started at ${new Date().toISOString()} ===\n`);
+  console.log(`\n=== Job Hunter Bot ${new Date().toISOString()} ===\n`);
 
   const seen = loadSeenJobs();
-  console.log(`Previously seen jobs: ${Object.keys(seen).length}`);
+  console.log(`Previously seen: ${Object.keys(seen).length} jobs`);
 
   const allJobs = await searchJobs();
   const newJobs = allJobs.filter(j => !seen[j.id]).slice(0, CONFIG.maxJobsPerRun);
-  console.log(`New jobs to process: ${newJobs.length}`);
+  console.log(`New jobs: ${newJobs.length}`);
 
-  if (newJobs.length === 0) {
-    console.log('No new jobs this hour. No email sent.');
-    return;
-  }
+  if (newJobs.length === 0) { console.log('No new jobs this hour.'); return; }
 
   const jobsWithResumes = [];
   for (let i = 0; i < newJobs.length; i++) {
     const job = newJobs[i];
-    console.log(`\nTailoring resume ${i+1}/${newJobs.length}: ${job.title} at ${job.company}`);
-    const tailoredResume = await tailorResume(job);
-    jobsWithResumes.push({ ...job, tailoredResume });
+    console.log(`\nTailoring ${i+1}/${newJobs.length}: ${job.title} at ${job.company}`);
+    jobsWithResumes.push({ ...job, tailoredResume: await tailorResume(job) });
     seen[job.id] = new Date().toISOString();
   }
 
-  console.log('\nSending email with PDF attachments...');
   await sendEmail(jobsWithResumes);
-
   saveSeenJobs(seen);
-  console.log(`\n=== Done. Emailed ${jobsWithResumes.length} jobs to ${CONFIG.recipientEmail} ===`);
+  console.log(`\n=== Done. Emailed ${jobsWithResumes.length} jobs ===`);
 }
 
-main().catch(err => {
-  console.error('\nFATAL ERROR:', err.message);
-  process.exit(1);
-});
+main().catch(err => { console.error('\nFATAL ERROR:', err.message); process.exit(1); });
