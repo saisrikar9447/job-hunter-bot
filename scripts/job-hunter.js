@@ -6,11 +6,14 @@ const path = require('path');
 
 const CONFIG = {
   recipientEmail: 'srikardangeti69@gmail.com',
-  maxJobsPerRun: 8,
+  maxJobsPerRun: 10,
   searchTerms: [
     'senior full stack developer',
     'senior full stack engineer',
     'staff software engineer full stack',
+    'software engineer full stack',
+    'senior software engineer',
+    'software engineer java react',
   ],
   minSalary: 100000,
   seenJobsFile: path.join(__dirname, '..', 'data', 'seen_jobs.json'),
