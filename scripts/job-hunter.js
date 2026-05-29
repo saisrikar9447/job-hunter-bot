@@ -1,5 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { Resend } = require('resend');
+const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
@@ -80,7 +81,7 @@ EDUCATION
 Master of Science, Information Technology | May 2025
 University of Wisconsin-Milwaukee | GPA: 3.6/4.0`;
 
-// ── Seen Jobs (deduplication) ─────────────────────────────────────────────────
+// ── Seen Jobs ─────────────────────────────────────────────────────────────────
 function loadSeenJobs() {
   try {
     if (!fs.existsSync(CONFIG.seenJobsFile)) return {};
@@ -90,9 +91,7 @@ function loadSeenJobs() {
       if (new Date(seen[id]).getTime() < cutoff) delete seen[id];
     }
     return seen;
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 function saveSeenJobs(seen) {
@@ -100,34 +99,23 @@ function saveSeenJobs(seen) {
   fs.writeFileSync(CONFIG.seenJobsFile, JSON.stringify(seen, null, 2));
 }
 
-// ── Job Search via Adzuna ─────────────────────────────────────────────────────
+// ── Job Search ────────────────────────────────────────────────────────────────
 async function searchJobs() {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
-
-  if (!appId || !appKey) {
-    throw new Error('ADZUNA_APP_ID or ADZUNA_APP_KEY secret is missing in GitHub repo settings.');
-  }
+  if (!appId || !appKey) throw new Error('ADZUNA_APP_ID or ADZUNA_APP_KEY secret is missing.');
 
   const allJobs = [];
   const seenIds = new Set();
 
   for (const term of CONFIG.searchTerms) {
-    const encoded = encodeURIComponent(term);
-    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&what=${encoded}&results_per_page=15&sort_by=date&max_days_old=1&salary_min=${CONFIG.minSalary}&content-type=application/json`;
-
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&what=${encodeURIComponent(term)}&results_per_page=15&sort_by=date&max_days_old=1&salary_min=${CONFIG.minSalary}&content-type=application/json`;
     try {
       console.log(`Searching: "${term}"...`);
       const res = await fetch(url);
-      if (!res.ok) {
-        console.warn(`  Adzuna returned ${res.status} for "${term}"`);
-        continue;
-      }
+      if (!res.ok) { console.warn(`  Adzuna ${res.status} for "${term}"`); continue; }
       const data = await res.json();
-      const results = data.results || [];
-      console.log(`  Found ${results.length} results`);
-
-      for (const job of results) {
+      for (const job of (data.results || [])) {
         if (!seenIds.has(job.id)) {
           seenIds.add(job.id);
           allJobs.push({
@@ -137,43 +125,34 @@ async function searchJobs() {
             location: job.location?.display_name || 'Remote / US',
             applyUrl: job.redirect_url || '',
             description: (job.description || '').slice(0, 1800),
-            salary: job.salary_min
-              ? `$${Math.round(job.salary_min / 1000)}k - $${Math.round((job.salary_max || job.salary_min * 1.3) / 1000)}k`
-              : 'Competitive',
+            salary: job.salary_min ? `$${Math.round(job.salary_min/1000)}k - $${Math.round((job.salary_max||job.salary_min*1.3)/1000)}k` : 'Competitive',
             postedDate: job.created || new Date().toISOString(),
           });
         }
       }
-    } catch (err) {
-      console.warn(`  Error fetching "${term}": ${err.message}`);
-    }
+      console.log(`  Found ${data.results?.length || 0} results`);
+    } catch (err) { console.warn(`  Error: ${err.message}`); }
   }
 
   allJobs.sort((a, b) => new Date(b.postedDate) - new Date(a.postedDate));
-  console.log(`Total unique jobs found: ${allJobs.length}`);
+  console.log(`Total unique jobs: ${allJobs.length}`);
   return allJobs;
 }
 
-// ── Resume Tailoring via Claude ───────────────────────────────────────────────
+// ── Tailor Resume via Claude ──────────────────────────────────────────────────
 async function tailorResume(job) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY secret is missing.');
-
-  const client = new Anthropic({ apiKey });
-
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const prompt = `You are an expert resume writer helping a senior software engineer land interviews at top tech companies.
 
-Tailor the resume below for this specific job. Follow all rules strictly:
-
-RULES:
+Tailor the resume below for this specific job. Follow ALL rules strictly:
 1. Only use skills and experience already in the resume — never add anything new
 2. Write naturally and professionally — must NOT sound AI-generated
 3. Naturally weave in keywords from the job description for ATS compatibility
 4. Reorder bullet points within each role to highlight most relevant work for THIS job
 5. Rewrite the Professional Summary to mirror this company's language and needs
-6. Keep all job titles, companies, dates, and metrics exactly as-is
-7. Output plain text only — no markdown, no asterisks, no special formatting
-8. Stay strictly focused on Full Stack Developer skills
+6. Keep all job titles, companies, dates, and metrics exactly as-is (no changes to numbers)
+7. Output plain text only — no markdown, no asterisks, no special symbols
+8. Focus strictly on Full Stack Developer skills
 
 JOB: ${job.title} at ${job.company}
 LOCATION: ${job.location}
@@ -187,83 +166,210 @@ ${BASE_RESUME}
 Output the complete tailored resume in plain text now:`;
 
   try {
-    const message = await client.messages.create({
+    const msg = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }],
     });
-    return message.content[0]?.text || BASE_RESUME;
+    return msg.content[0]?.text || BASE_RESUME;
   } catch (err) {
-    console.warn(`  Claude tailoring failed for ${job.company}: ${err.message}`);
+    console.warn(`  Claude failed for ${job.company}: ${err.message}`);
     return BASE_RESUME;
   }
 }
 
-// ── Email HTML Builder ────────────────────────────────────────────────────────
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+// ── Generate PDF Buffer from resume text ──────────────────────────────────────
+function generateResumePDF(resumeText, jobTitle, company) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 45, size: 'LETTER' });
+    const buffers = [];
+
+    doc.on('data', chunk => buffers.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(buffers)));
+    doc.on('error', reject);
+
+    const BLUE  = '#1D4ED8';
+    const DARK  = '#0F172A';
+    const MID   = '#374151';
+    const LIGHT = '#6B7280';
+    const W     = doc.page.width - 90; // usable width
+
+    const lines = resumeText.split('\n');
+    let i = 0;
+
+    // ── Header block: name (first non-empty line) ─────────────────────────────
+    while (i < lines.length && lines[i].trim() === '') i++;
+
+    const nameLine = lines[i++] || 'SATYA SAI SRIKAR DANGETI';
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(DARK).text(nameLine, 45, 45);
+
+    // Second line = job title
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i < lines.length) {
+      doc.font('Helvetica').fontSize(11).fillColor(BLUE).text(lines[i++]);
+    }
+
+    // Third line = contact
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i < lines.length) {
+      doc.font('Helvetica').fontSize(9).fillColor(LIGHT).text(lines[i++]);
+    }
+
+    // Blue rule
+    doc.moveDown(0.4);
+    const ruleY = doc.y;
+    doc.moveTo(45, ruleY).lineTo(45 + W, ruleY).lineWidth(1.5).strokeColor(BLUE).stroke();
+    doc.moveDown(0.5);
+
+    // ── Remaining lines ───────────────────────────────────────────────────────
+    const SECTION_KEYWORDS = [
+      'PROFESSIONAL SUMMARY', 'CORE COMPETENCIES', 'PROFESSIONAL EXPERIENCE',
+      'PROJECTS', 'TECHNICAL ACHIEVEMENTS', 'EDUCATION', 'SKILLS', 'EXPERIENCE',
+      'SUMMARY', 'CERTIFICATIONS'
+    ];
+
+    function isSectionHeading(line) {
+      const u = line.trim().toUpperCase();
+      return SECTION_KEYWORDS.some(k => u.includes(k));
+    }
+
+    function isJobHeader(line) {
+      // Lines like "Role | Date" or "Role | Company | Date" with a pipe
+      return line.includes('|') && !line.startsWith('-') && !line.startsWith('•');
+    }
+
+    function isCompanyLine(line) {
+      // Lines directly after job header, short, no dash
+      return false; // handled inline
+    }
+
+    while (i < lines.length) {
+      const raw = lines[i];
+      const line = raw.trim();
+      i++;
+
+      if (line === '') { doc.moveDown(0.25); continue; }
+
+      if (isSectionHeading(line)) {
+        // Section heading
+        doc.moveDown(0.3);
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor(BLUE)
+           .text(line.toUpperCase(), { characterSpacing: 1.1 });
+        const sy = doc.y + 2;
+        doc.moveTo(45, sy).lineTo(45 + W, sy).lineWidth(0.4).strokeColor('#E2E8F0').stroke();
+        doc.moveDown(0.35);
+
+      } else if (line.startsWith('-') || line.startsWith('•')) {
+        // Bullet
+        const text = line.replace(/^[-•]\s*/, '');
+        doc.font('Helvetica').fontSize(9).fillColor(MID)
+           .text(`\u2022  ${text}`, { indent: 10, width: W - 10, lineGap: 1.5 });
+        doc.moveDown(0.1);
+
+      } else if (isJobHeader(line)) {
+        // Job title line — split on last pipe to get date on right
+        const parts = line.split('|');
+        const dateStr = parts[parts.length - 1].trim();
+        const roleStr = parts.slice(0, -1).join('|').trim();
+
+        const dateWidth = 95;
+        const roleWidth = W - dateWidth;
+        const startY = doc.y;
+
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(DARK)
+           .text(roleStr, 45, startY, { width: roleWidth });
+        doc.font('Helvetica').fontSize(9).fillColor(LIGHT)
+           .text(dateStr, 45 + roleWidth, startY, { width: dateWidth, align: 'right' });
+        doc.y = startY + 14;
+        doc.moveDown(0.1);
+
+      } else if (line.includes('|') && doc.y < 500) {
+        // Company/location line (secondary pipe line)
+        doc.font('Helvetica').fontSize(9.5).fillColor(MID).text(line);
+        doc.moveDown(0.25);
+
+      } else {
+        // Normal paragraph text (summary, competencies, etc.)
+        doc.font('Helvetica').fontSize(9.5).fillColor(MID)
+           .text(line, { width: W, lineGap: 1.5 });
+        doc.moveDown(0.15);
+      }
+    }
+
+    doc.end();
+  });
+}
+
+// ── Build HTML Email ──────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function buildEmail(jobs) {
   const now = new Date().toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    timeZone: 'America/New_York', weekday:'short', month:'short',
+    day:'numeric', hour:'2-digit', minute:'2-digit'
   });
 
   const blocks = jobs.map((job, i) => `
-<div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;padding:28px 32px;margin-bottom:28px;">
-  <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em;">Job ${i + 1} of ${jobs.length}</p>
-  <h2 style="margin:0 0 2px;font-size:20px;font-weight:700;color:#111827;">${esc(job.title)}</h2>
-  <p style="margin:0 0 12px;font-size:15px;color:#374151;font-weight:500;">${esc(job.company)} &nbsp;·&nbsp; ${esc(job.location)} &nbsp;·&nbsp; ${esc(job.salary)}</p>
-  <a href="${esc(job.applyUrl)}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;padding:10px 22px;border-radius:6px;font-size:14px;font-weight:600;margin-bottom:24px;">Apply Now &rarr;</a>
-  <div style="border-top:1px solid #e5e7eb;padding-top:20px;">
-    <p style="margin:0 0 12px;font-size:13px;font-weight:700;color:#111827;text-transform:uppercase;letter-spacing:0.06em;">Tailored Resume for This Role</p>
-    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:18px;">
-      <pre style="margin:0;font-family:'Courier New',monospace;font-size:11.5px;line-height:1.65;color:#1f2937;white-space:pre-wrap;word-wrap:break-word;">${esc(job.tailoredResume)}</pre>
-    </div>
+<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:24px 28px;margin-bottom:24px;">
+  <p style="margin:0 0 3px;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;">Job ${i+1} of ${jobs.length}</p>
+  <h2 style="margin:0 0 2px;font-size:19px;font-weight:700;color:#111827;">${esc(job.title)}</h2>
+  <p style="margin:0 0 12px;font-size:14px;color:#374151;">${esc(job.company)} &nbsp;·&nbsp; ${esc(job.location)} &nbsp;·&nbsp; ${esc(job.salary)}</p>
+  <a href="${esc(job.applyUrl)}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:9px 20px;border-radius:6px;font-size:13px;font-weight:600;margin-bottom:16px;">Apply Now &rarr;</a>
+  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:12px 16px;font-size:13px;color:#0369a1;">
+    <strong>📎 Tailored resume attached:</strong> <em>Resume_${esc(job.company.replace(/\s+/g,'_'))}.pdf</em><br>
+    <span style="font-size:12px;color:#0284c7;">Open the attachment — it's a PDF resume tailored specifically for this role.</span>
   </div>
 </div>`).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<div style="max-width:760px;margin:0 auto;padding:28px 16px;">
-  <div style="background:#1d4ed8;border-radius:10px;padding:24px 32px;margin-bottom:28px;">
-    <h1 style="margin:0 0 6px;font-size:22px;font-weight:800;color:#ffffff;">Job Digest &mdash; ${jobs.length} New Match${jobs.length > 1 ? 'es' : ''}</h1>
-    <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.8);">Senior Full Stack Developer &nbsp;&middot;&nbsp; Remote + Hybrid &nbsp;&middot;&nbsp; ${now} ET</p>
+<div style="max-width:680px;margin:0 auto;padding:24px 16px;">
+  <div style="background:#1d4ed8;border-radius:10px;padding:22px 28px;margin-bottom:24px;">
+    <h1 style="margin:0 0 5px;font-size:21px;font-weight:800;color:#fff;">Job Digest &mdash; ${jobs.length} New Match${jobs.length>1?'es':''}</h1>
+    <p style="margin:0;font-size:12px;color:rgba(255,255,255,.8);">Senior Full Stack Developer &nbsp;&middot;&nbsp; Remote + Hybrid &nbsp;&middot;&nbsp; ${now} ET</p>
   </div>
+  <p style="font-size:13px;color:#374151;margin:0 0 20px;padding:12px 16px;background:#fff;border-radius:8px;border:1px solid #e5e7eb;">
+    Each job below has a <strong>tailored PDF resume attached</strong> — open the PDF attachments to find the resume customized for that specific role.
+  </p>
   ${blocks}
-  <div style="text-align:center;padding:20px;color:#9ca3af;font-size:12px;">
+  <div style="text-align:center;padding:16px;color:#9ca3af;font-size:11px;">
     <p style="margin:0;">Job Hunter Bot &mdash; powered by Claude AI</p>
   </div>
-</div>
-</body></html>`;
+</div></body></html>`;
 }
 
-// ── Send Email ────────────────────────────────────────────────────────────────
+// ── Send Email with PDF Attachments ───────────────────────────────────────────
 async function sendEmail(jobs) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) throw new Error('RESEND_API_KEY secret is missing.');
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  if (!process.env.RESEND_API_KEY) throw new Error('RESEND_API_KEY secret is missing.');
 
-  const resend = new Resend(apiKey);
-  const now = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const now = new Date().toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+
+  // Build PDF attachments — one per job
+  console.log('Generating PDF attachments...');
+  const attachments = [];
+  for (const job of jobs) {
+    const pdfBuffer = await generateResumePDF(job.tailoredResume, job.title, job.company);
+    const safeName = job.company.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
+    attachments.push({
+      filename: `Resume_${safeName}_${job.title.replace(/[^a-zA-Z0-9]/g,'_').slice(0,25)}.pdf`,
+      content: pdfBuffer.toString('base64'),
+    });
+    console.log(`  PDF ready: Resume_${safeName}.pdf (${Math.round(pdfBuffer.length/1024)}KB)`);
+  }
 
   const { error } = await resend.emails.send({
     from: 'Job Hunter Bot <onboarding@resend.dev>',
     to: [CONFIG.recipientEmail],
-    subject: `${jobs.length} New Senior Full Stack Job${jobs.length > 1 ? 's' : ''} — ${now}`,
+    subject: `${jobs.length} New Senior Full Stack Job${jobs.length>1?'s':''} — ${now} (PDF resumes attached)`,
     html: buildEmail(jobs),
+    attachments,
   });
 
   if (error) throw new Error(`Resend failed: ${JSON.stringify(error)}`);
-  console.log('Email sent successfully.');
+  console.log(`Email sent with ${attachments.length} PDF attachment(s).`);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -274,7 +380,7 @@ async function main() {
   console.log(`Previously seen jobs: ${Object.keys(seen).length}`);
 
   const allJobs = await searchJobs();
-  const newJobs = allJobs.filter((j) => !seen[j.id]).slice(0, CONFIG.maxJobsPerRun);
+  const newJobs = allJobs.filter(j => !seen[j.id]).slice(0, CONFIG.maxJobsPerRun);
   console.log(`New jobs to process: ${newJobs.length}`);
 
   if (newJobs.length === 0) {
@@ -285,20 +391,20 @@ async function main() {
   const jobsWithResumes = [];
   for (let i = 0; i < newJobs.length; i++) {
     const job = newJobs[i];
-    console.log(`\nTailoring resume ${i + 1}/${newJobs.length}: ${job.title} at ${job.company}`);
+    console.log(`\nTailoring resume ${i+1}/${newJobs.length}: ${job.title} at ${job.company}`);
     const tailoredResume = await tailorResume(job);
     jobsWithResumes.push({ ...job, tailoredResume });
     seen[job.id] = new Date().toISOString();
   }
 
-  console.log('\nSending email...');
+  console.log('\nSending email with PDF attachments...');
   await sendEmail(jobsWithResumes);
 
   saveSeenJobs(seen);
   console.log(`\n=== Done. Emailed ${jobsWithResumes.length} jobs to ${CONFIG.recipientEmail} ===`);
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error('\nFATAL ERROR:', err.message);
   process.exit(1);
 });
